@@ -416,9 +416,6 @@ def find_test(test_name):
         print("Test named {} not found.".format(test_name))
         sys.exit()
 
-def get_appformix_url():
-
-
 if __name__ == "__main__":
     all_args = args(sys.argv[1:])
 
