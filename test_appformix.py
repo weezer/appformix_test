@@ -1,3 +1,4 @@
+import unittest
 from __future__ import division
 import argparse
 import datetime
@@ -10,14 +11,53 @@ import time
 import tempfile
 import requests
 import json
+import functools
+import unittest.loader
 
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
+#
+# class TestStringMethods(unittest.TestCase):
+#
+#     def test_upper(self):
+#         self.assertEqual('foo'.upper(), 'FOO')
+#
+#     def test_isupper(self):
+#         self.assertTrue('FOO'.isupper())
+#         self.assertFalse('Foo'.isupper())
+#
+#     def test_split(self):
+#         s = 'hello world'
+#         self.assertEqual(s.split(), ['hello', 'world'])
+#         # check that s.split fails when the separator is not a string
+#         with self.assertRaises(TypeError):
+#             s.split(2)
 
-class ServiceTest(object):
+
+def rename(newname):
+    def decorator(f):
+        f.__name__ = newname
+        return f
+    return decorator
+
+
+class MyLoader(unittest.TestLoader):
+    def getTestCaseNames(self, testCaseClass):
+        def isTestMethod(attrname, testCaseClass=testCaseClass, prefix=self.testMethodPrefix):
+            attr = getattr(testCaseClass, attrname)
+            if getattr(attr, "unittest_method", False):
+                return True
+            return attrname.startswith(prefix) and callable(attr)
+
+        testFnNames = list(filter(isTestMethod, dir(testCaseClass)))
+        if self.sortTestMethodsUsing:
+            testFnNames.sort(key=functools.cmp_to_key(self.sortTestMethodsUsing))
+        return testFnNames
+
+class ServiceTest(unittest.TestCase):
     def pre_test(self, *args, **kwargs):
         """Any actions that need to be taken before starting the timer
         These actions will run inside the test loop, but before marking a
@@ -27,18 +67,13 @@ class ServiceTest(object):
         """
         raise NotImplementedError
 
-    def run(self):
-        """Run the main test, within the timing window.
-        This test run should actually create and query a resource.
-        """
-        raise NotImplementedError
+    def setUp(self):
+        """Any pre-test setUp, get the connection first"""
+        self.get_connection()
 
-    def post_test(self):
+    def tearDown(self):
         """Any post-test clean up work that needs to be done and not timed."""
         raise NotImplementedError
-
-    def __init__(self):
-        self.get_connection()
 
     def configure_logger(self, logger, console_logging=False):
         """Configure a stream and file log for a given service
@@ -108,7 +143,8 @@ class AppformixTest(ServiceTest):
     service_name = 'appformix'
     description = 'Obtain the appformix controller status'
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         token = self.get_token()
         appformix_url = self.get_appformix_url()
         msg = "appformix controller is working"
@@ -126,7 +162,8 @@ class PhysicalHostTest(ServiceTest):
             content = f.readlines()
         self.content = [x.strip() for x in content].sort()
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         token = self.get_token()
         appformix_url = self.get_appformix_url()
         headers = {'content-type': 'application/json', "X-Auth-Type": "openstack", "X-Auth-Token": token,
@@ -138,11 +175,13 @@ class PhysicalHostTest(ServiceTest):
             msg = "Appformix is not working on all physical host"
         return msg
 
+
 class KeystoneTest(ServiceTest):
     service_name = 'keystone'
     description = 'Obtain a token then a project list to validate it worked'
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
 
         projects = self.get_objects('identity', 'projects')
         msg = "API reached, no projects found."
@@ -161,7 +200,8 @@ class GlanceTest(ServiceTest):
         self.temp_file.write(os.urandom(1024 * 1024))
         self.temp_file.seek(0)
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         self.get_connection()
 
         image_attrs = {
@@ -209,7 +249,8 @@ class NovaTest(ServiceTest):
     def pre_test(self):
         self.generate_network()
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         # Have to iterate over the generator returned to actually
         # see the flavors
         flavors = [flavor for flavor in self.conn.compute.flavors()]
@@ -239,7 +280,8 @@ class NeutronTest(ServiceTest):
     service_name = 'neutron'
     description = 'Query for a list of networks'
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         networks = self.get_objects('network', 'networks')
 
         msg = 'API reached, no networks found'
@@ -263,7 +305,8 @@ class CinderTest(ServiceTest):
         self.appformic_volume = self.conn.block_store.create_volume(display_name="app_formix_test", size=1)
         #conn.block_store.delete_volume(volume.id)
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         appformix_url = self.get_appformix_url()
         token = self.get_token()
         vol_status = self.get_volumes_status(appformix_url, token)
@@ -278,7 +321,8 @@ class SwiftTest(ServiceTest):
     service_name = 'swift'
     description = 'Query for a list of containers'
 
-    def run(self):
+    @rename("test_" + service_name)
+    def test_run(self):
         containers = self.get_objects('object_store', 'containers')
 
         msg = 'API reached, no containers found'
@@ -287,143 +331,5 @@ class SwiftTest(ServiceTest):
 
         return msg
 
-
-class TestRunner(object):
-    """Run a test in a loop, with the option to gracefully exit"""
-    stop_now = False
-
-    def __init__(self):
-        signal.signal(signal.SIGINT, self.prep_exit)
-        signal.signal(signal.SIGTERM, self.prep_exit)
-        self.failures = 0
-        self.attempts = 0
-
-    def prep_exit(self, signum, frame):
-        self.stop_now = True
-        logger.info("Received signal, stopping")
-
-    def write_summary(self):
-        percentage = (self.failures / self.attempts) * 100
-        # Display minimum of 2 digits, but don't use decimals.
-        percent_str = "%2.0f" % percentage
-
-        logger.info("%s%% failure rate", percent_str)
-
-        # Output to stdout for use by other programs
-        print(percent_str)
-
-    def test_loop(self, test):
-        """Main loop to execute tests
-        Executes and times interactions with OpenStack services to gather
-        timing data.
-        Execution can be ended by sending SIGINT or SIGTERM and the running
-        test will finish.
-        :param: test - on object that performs some action
-                against an OpenStack service API.
-        """
-        disconnected = None
-
-        try:
-            # Pause for a bit so we're not generating more data than we
-            # can handle
-            time.sleep(1)
-
-            try:
-                test.pre_test()
-            except NotImplementedError:
-                pass
-
-            start_time = datetime.datetime.now()
-
-            # Let the test function report it's own errors
-            msg = test.run()
-
-            end_time = datetime.datetime.now()
-
-            if disconnected:
-                dis_delta = end_time - disconnected
-                disconnected = None
-                logger.info("Reconnect {}s".format(
-                            dis_delta.total_seconds()))
-
-            delta = end_time - start_time
-
-            logger.info("{} {}".format(msg, delta.total_seconds()))
-
-            try:
-                test.post_test()
-            except NotImplementedError:
-                pass
-
-        # Catch all exceptions not handled by the tests themselves,
-        # since we want to keep the loop running until explicitly stopped
-        except Exception as e:
-            self.failures += 1
-            if not disconnected:
-                disconnected = datetime.datetime.now()
-            # OpenStack API exceptions put their info in the 'details'
-            # attribute; 'message' is the standard one.
-            error_msg = getattr(e, 'details', e.message)
-            logger.error("%s", error_msg)
-
-        if self.stop_now:
-            self.write_summary()
-            sys.exit()
-
-
-available_tests = {
-    'keystone': KeystoneTest,
-    'glance': GlanceTest,
-    'nova': NovaTest,
-    'neutron': NeutronTest,
-    'cinder': CinderTest,
-    'swift': SwiftTest,
-}
-
-
-def args(arg_list):
-
-    parser = argparse.ArgumentParser(
-        usage='%(prog)s',
-        description=('OpenStack activity simulators. Returns percentage of '
-                     'failed attempts at creating/deleting resources.'),
-    )
-
-    parser.add_argument(
-        'test',
-        help=("Name of test to execute, 'list' for a list of available"
-              " tests")
-    )
-
-    parser.add_argument(
-        '-c',
-        '--console',
-        help=("Log output to the console for interactive viewing"),
-        action='store_true',
-    )
-
-    return parser.parse_args(arg_list)
-
-
-def find_test(test_name):
-    if test_name in available_tests:
-        return available_tests[test_name]
-    elif test_name == "list":
-        for key, test_class in available_tests.items():
-            print("{} -> {}".format(key, test_class.description))
-        sys.exit()
-    else:
-        print("Test named {} not found.".format(test_name))
-        sys.exit()
-
-if __name__ == "__main__":
-    all_args = args(sys.argv[1:])
-
-    target_test_class = find_test(all_args.test)
-
-    target_test = target_test_class()
-    target_test.configure_logger(logger, console_logging=all_args.console)
-
-    runner = TestRunner()
-
-    runner.test_loop(target_test)
+if __name__ == '__main__':
+    unittest.main()
