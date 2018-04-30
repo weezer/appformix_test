@@ -122,6 +122,7 @@ class ServiceTest(unittest.TestCase):
 
 
 class AppformixTest(ServiceTest):
+    """Reqeusts the appformix url, if its working should return 200 and compare the value."""
     service_name = 'appformix'
     description = 'Obtain the appformix controller status'
 
@@ -129,13 +130,11 @@ class AppformixTest(ServiceTest):
     def test_run(self):
         token = self.get_token()
         appformix_url = self.get_appformix_url()
-        msg = "appformix controller is working"
-        if 200 != requests.get(appformix_url + "/status", verify=False):
-            msg = "Can't find the appformix controller, please verify"
-        return msg
+        self.assertEqual(200, requests.get(appformix_url + "/status", verify=False))
 
-
+# @TODO need to fetch the inventory file
 class PhysicalHostTest(ServiceTest):
+    """Compares the hostnames been found from appformix with the hostnames from inventory file"""
     service_name = 'physical host'
     description = 'Obtain the physical host status'
 
@@ -157,8 +156,9 @@ class PhysicalHostTest(ServiceTest):
             msg = "Appformix is not working on all physical host"
         return msg
 
-
+# @todo need to create a new project, and c weather the project under appformix monitorying.
 class KeystoneTest(ServiceTest):
+    """Checks if keystone is working properly, lacking of appformix case now"""
     service_name = 'keystone'
     description = 'Obtain a token then a project list to validate it worked'
 
@@ -169,39 +169,6 @@ class KeystoneTest(ServiceTest):
         msg = "API reached, no projects found."
         if projects:
             msg = "Project list retrieved"
-        return msg
-
-
-class GlanceTest(ServiceTest):
-    service_name = 'glance'
-    description = 'Upload and delete a 1MB file'
-
-    def pre_test(self):
-        # make a bogus file to give to glance.
-        self.temp_file = tempfile.TemporaryFile()
-        self.temp_file.write(os.urandom(1024 * 1024))
-        self.temp_file.seek(0)
-
-    @rename("test_" + service_name)
-    def test_run(self):
-        self.get_connection()
-
-        image_attrs = {
-            'name': 'Rolling test',
-            'disk_format': 'raw',
-            'container_format': 'bare',
-            'data': self.temp_file,
-            'visibility': 'public',
-        }
-
-        self.conn.image.upload_image(**image_attrs)
-
-        image = self.conn.image.find_image('Rolling test')
-        self.conn.image.delete_image(image, ignore_missing=False)
-
-        self.temp_file.close()
-
-        msg = "Image created and deleted."
         return msg
 
 
@@ -228,7 +195,8 @@ class NovaTest(ServiceTest):
             self.conn.network.delete_subnet(_subnet, ignore_missing=False)
         self.conn.network.delete_network(found_network, ignore_missing=False)
 
-    def pre_test(self):
+    def setUp(self):
+        super(NovaTest, self).pre_test()
         self.generate_network()
 
     @rename("test_" + service_name)
@@ -248,29 +216,11 @@ class NovaTest(ServiceTest):
 
         resp = requests.get(appformix_url + "/instances", headers=headers, verify=False)
 
-        msg = "Appformix works on nova"
-        if "appformix-volume-test" not in str(resp.json()):
-            msg = "Appformix not work on Nova"
-        return msg
+        self.assertIn("appformix-volume-test" in str(resp.json()))
 
-    def post_test(self):
+    def tearDown(self):
         self.conn.compute.delete_server(self.server.id, force=True)
         self.delete_network()
-
-
-class NeutronTest(ServiceTest):
-    service_name = 'neutron'
-    description = 'Query for a list of networks'
-
-    @rename("test_" + service_name)
-    def test_run(self):
-        networks = self.get_objects('network', 'networks')
-
-        msg = 'API reached, no networks found'
-        if networks:
-            msg = 'Network list received'
-
-        return msg
 
 
 class CinderTest(ServiceTest):
@@ -283,9 +233,9 @@ class CinderTest(ServiceTest):
         r = requests.get(url + "/volumes", headers=headers, verify=False)
         return r
 
-    def pre_test(self):
+    def setUp(self):
+        super(CinderTest, self).setUp()
         self.appformic_volume = self.conn.block_store.create_volume(display_name="app_formix_test", size=1)
-        #conn.block_store.delete_volume(volume.id)
 
     @rename("test_" + service_name)
     def test_run(self):
@@ -293,12 +243,10 @@ class CinderTest(ServiceTest):
         token = self.get_token()
         vol_status = self.get_volumes_status(appformix_url, token)
 
-        msg = 'API reached, no volumes found'
-        if "appformix-volume-test" in str(vol_status.json()):
-            msg = 'Volume list received'
-        return msg
+        self.assertIn("appformix-volume-test", str(vol_status.json())
 
 
+# @todo no test case for swift so far
 class SwiftTest(ServiceTest):
     service_name = 'swift'
     description = 'Query for a list of containers'
@@ -310,6 +258,20 @@ class SwiftTest(ServiceTest):
         msg = 'API reached, no containers found'
         if containers:
             msg = 'Container list received'
+
+        return msg
+
+# @todo no test case for neutron so far
+class NeutronTest(ServiceTest):
+    service_name = 'neutron'
+    description = 'Query for a list of networks'
+
+    def run(self):
+        networks = self.get_objects('network', 'networks')
+
+        msg = 'API reached, no networks found'
+        if networks:
+            msg = 'Network list received'
 
         return msg
 
